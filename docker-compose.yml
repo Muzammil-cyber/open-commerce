@@ -1,0 +1,103 @@
+# Local:       cp .env.example .env && docker compose --profile local up --build
+# Production:  docker compose up -d --build   (managed/external S3, real secrets in .env)
+#
+# The `local` profile adds SeaweedFS as an S3-compatible store. In production leave
+# the profile off and point S3_* at your real bucket.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-openfront}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-openfront}
+      POSTGRES_DB: ${POSTGRES_DB:-openfront}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-openfront} -d ${POSTGRES_DB:-openfront}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # Local only: expose to host for psql/Prisma Studio. Remove in production.
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  app:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL:-http://localhost:3000}
+        NEXT_PUBLIC_STRIPE_KEY: ${NEXT_PUBLIC_STRIPE_KEY:-}
+        NEXT_PUBLIC_PAYPAL_CLIENT_ID: ${NEXT_PUBLIC_PAYPAL_CLIENT_ID:-}
+        NEXT_PUBLIC_PAYPAL_SANDBOX: ${NEXT_PUBLIC_PAYPAL_SANDBOX:-}
+        NEXT_PUBLIC_DEFAULT_REGION: ${NEXT_PUBLIC_DEFAULT_REGION:-}
+        NEXT_PUBLIC_VIEW_ORDER: ${NEXT_PUBLIC_VIEW_ORDER:-}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    # Optional keys (Stripe, PayPal, Shippo, SMTP, ...) come from .env.
+    # Anything under `environment` below takes precedence over it.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      NODE_ENV: production
+      # Always talk to the compose db, regardless of what .env says.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-openfront}:${POSTGRES_PASSWORD:-openfront}@db:5432/${POSTGRES_DB:-openfront}
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required (min 32 chars)}
+      # S3 is mandatory when NODE_ENV=production. Defaults target local SeaweedFS.
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://host.docker.internal:8333}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-openfront}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-openfront}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-openfront-secret}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${APP_PORT:-3000}:3000"
+
+  # --- local only -----------------------------------------------------------
+  # S3-compatible object storage. Signed upload/image URLs embed S3_ENDPOINT, so
+  # it must resolve from both this network and your browser; that is why the
+  # default is host.docker.internal rather than the service name.
+  seaweedfs:
+    profiles: ["local"]
+    image: chrislusf/seaweedfs:latest
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        cat > /tmp/s3.json <<EOF
+        {"identities":[{"name":"openfront","credentials":[{"accessKey":"$${S3_ACCESS_KEY_ID}","secretKey":"$${S3_SECRET_ACCESS_KEY}"}],"actions":["Admin","Read","Write","List","Tagging"]}]}
+        EOF
+        exec weed server -dir=/data -master.volumeSizeLimitMB=1024 -s3 -s3.port=8333 -s3.config=/tmp/s3.json
+    environment:
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-openfront}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-openfront-secret}
+    volumes:
+      - seaweedfs:/data
+    ports:
+      - "8333:8333"
+
+  seaweedfs-init:
+    profiles: ["local"]
+    image: chrislusf/seaweedfs:latest
+    depends_on:
+      - seaweedfs
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        for i in $$(seq 1 30); do
+          echo "s3.bucket.create -name $${S3_BUCKET_NAME}" | weed shell -master=seaweedfs:9333 && exit 0
+          sleep 2
+        done
+        exit 1
+    environment:
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-openfront}
+
+volumes:
+  pgdata:
+  seaweedfs:

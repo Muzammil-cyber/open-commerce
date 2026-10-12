@@ -113,38 +113,7 @@ Openfront includes 78+ sophisticated data models covering:
    cp .env.example .env
    ```
 
-   Update `.env` with your configuration:
-   ```env
-   # Required - Database Connection
-   DATABASE_URL="postgresql://username:password@localhost:5432/openfront"
-
-   # Required - Session Security (must be at least 32 characters)
-   SESSION_SECRET="your-very-long-session-secret-key-here-32-chars-minimum"
-
-   # Optional - Payment Providers (Stripe)
-   STRIPE_SECRET_KEY="sk_test_51..."
-   STRIPE_WEBHOOK_SECRET="whsec_..."
-
-   # Optional - Payment Providers (PayPal)
-   PAYPAL_CLIENT_ID="your-paypal-client-id"
-   PAYPAL_CLIENT_SECRET="your-paypal-client-secret"
-
-   # Optional - Shipping Provider (Shippo)
-   SHIPPO_API_KEY="shippo_test_..."
-
-   # Optional - File Storage (S3-compatible)
-   S3_BUCKET_NAME="your-bucket-name"
-   S3_REGION="us-east-1"
-   S3_ACCESS_KEY_ID="your-access-key"
-   S3_SECRET_ACCESS_KEY="your-secret-key"
-
-   # Optional - Email Configuration
-   SMTP_HOST="smtp.gmail.com"
-   SMTP_PORT="587"
-   SMTP_USER="your-email@gmail.com"
-   SMTP_PASS="your-app-password"
-   FROM_EMAIL="noreply@yourstore.com"
-   ```
+   Update `.env` with your configuration. `DATABASE_URL`, `SESSION_SECRET`, `NEXT_PUBLIC_BACKEND_URL` and the `S3_*` storage settings are required; everything else is optional and documented in [`.env.example`](.env.example).
 
 3. **Start development server:**
    ```bash
@@ -250,7 +219,7 @@ For comprehensive technical documentation, see [docs.openship.org/docs/openfront
 Openfront is production-ready and can be deployed to:
 
 - **Vercel**: One-click deployment with the button above
-- **Docker**: Containerized deployment with included Dockerfile
+- **Docker**: Containerized deployment with the included `Dockerfile` and `docker-compose.yml` (see [Docker](#docker))
 - **Self-hosted**: Deploy to any Node.js hosting environment
 
 ### Scaling Considerations
@@ -259,6 +228,36 @@ Openfront is production-ready and can be deployed to:
 - Background processing for intensive operations
 - CDN integration for static assets
 - Comprehensive monitoring and alerting
+
+## Docker
+
+The repo ships a `Dockerfile` and a `docker-compose.yml` that run the app with PostgreSQL. Migrations are applied automatically on start.
+
+### Run locally
+
+```bash
+cp .env.example .env        # set SESSION_SECRET (32+ characters)
+docker compose --profile local up --build
+```
+
+- Storefront: [http://localhost:3000](http://localhost:3000), admin: [http://localhost:3000/dashboard](http://localhost:3000/dashboard)
+- The `local` profile also starts [SeaweedFS](https://github.com/seaweedfs/seaweedfs) as an S3-compatible store on port `8333` and creates the bucket named by `S3_BUCKET_NAME`.
+- `DATABASE_URL` in `.env` is ignored by compose; the app is pointed at the bundled `db` service (configure it with `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB`).
+- Signed storage URLs embed `S3_ENDPOINT`, so it must resolve from your browser as well as the container. The local default is `http://host.docker.internal:8333`, which Docker Desktop resolves automatically. On Linux, add `127.0.0.1 host.docker.internal` to `/etc/hosts`.
+
+### Run in production
+
+```bash
+docker compose up -d --build
+```
+
+Leave the `local` profile off and set real values in `.env`:
+
+- `SESSION_SECRET` and `NEXT_PUBLIC_BACKEND_URL` (your public URL)
+- `S3_ENDPOINT`, `S3_BUCKET_NAME`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` pointing at your S3-compatible storage
+- strong `POSTGRES_PASSWORD`, and remove the `db` port mapping (or use a managed database and override `DATABASE_URL`)
+
+`NEXT_PUBLIC_*` variables are inlined at build time, so changing them requires `docker compose build`.
 
 ## Contributing
 
